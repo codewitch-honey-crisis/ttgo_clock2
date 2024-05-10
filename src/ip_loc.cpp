@@ -20,7 +20,6 @@ bool ip_loc::fetch(float* out_lat,
                 size_t city_size,
                 char* out_time_zone,
                 size_t time_zone_size) {
-    // uses under 1KB of RAM or so
     // URL for IP resolution service
     char url[256];
     *url = 0;
