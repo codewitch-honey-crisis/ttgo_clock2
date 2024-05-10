@@ -76,6 +76,7 @@ void setup()
 {
     Serial.begin(115200);
     ttgo_initialize();
+    dimmer.max_level(.25);
     lcd.rotation(3);
     Serial.println("Clock booted");
     // init the screen and callbacks
