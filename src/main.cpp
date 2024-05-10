@@ -188,7 +188,7 @@ void loop()
         case 3: // fetch
             Serial.println("Retrieving time info...");
             connection_refresh_ts = millis();
-            // grabs the timezone offset based on IP
+            // grabs the timezone and tz offset based on IP
             ip_loc::fetch(nullptr,nullptr,&time_offset,nullptr,0,nullptr,0,time_zone_buffer,sizeof(time_zone_buffer));
             WiFi.hostByName(time_server_domain,time_server_ip);
             connection_state = 4;
