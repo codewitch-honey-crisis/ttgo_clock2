@@ -31,6 +31,8 @@ static ntp_time time_server;
 static char time_zone_buffer[64];
 static bool time_fetching=false;
 
+static int connection_state=0;
+
 // the screen/control definitions
 screen_t main_screen(
     {240,135},
@@ -71,7 +73,11 @@ static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* s
         draw::icon(destination,point16::zero(),faWifi,color_t::light_gray);
     }
 }
-
+void button_pressed(bool pressed, void* state) {
+    if(pressed && connection_state==0) {
+        connection_state = 1;
+    }
+}
 void setup()
 {
     Serial.begin(115200);
@@ -141,7 +147,8 @@ void setup()
                 wifi_icon.dimensions().width,0));
     wifi_icon.on_paint_callback(wifi_icon_paint);
     main_screen.register_control(wifi_icon);
-    
+    button_a.on_pressed_changed(button_pressed);
+    button_b.on_pressed_changed(button_pressed);
 }
 
 void loop()
@@ -149,7 +156,6 @@ void loop()
     ///////////////////////////////////
     // manage connection and fetching
     ///////////////////////////////////
-    static int connection_state=0;
     static uint32_t connection_refresh_ts = 0;
     static uint32_t time_ts = 0;
     IPAddress time_server_ip;
@@ -158,10 +164,10 @@ void loop()
         if(connection_refresh_ts==0 || millis() > (connection_refresh_ts+(time_refresh_interval*1000))) {
             connection_refresh_ts = millis();
             connection_state = 1;
-            time_ts = 0;
         }
         break;
         case 1: // connecting
+            time_ts = 0;
             time_fetching = true;
             wifi_icon.invalidate();
             if(WiFi.status()!=WL_CONNECTED) {
