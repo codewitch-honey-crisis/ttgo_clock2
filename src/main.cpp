@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <ttgo.hpp>
+#include <button.hpp>
 #include <uix.hpp>
 #include <gfx.hpp>
 #include <WiFi.h>
@@ -15,6 +15,11 @@
 // include this after everything else except ui.hpp
 #include <config.hpp>
 #include <ui.hpp>
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_panel_vendor.h"
 
 // namespace imports
 using namespace arduino;
@@ -24,8 +29,18 @@ using namespace uix;
 // use two 32KB buffers (DMA)
 static uint8_t lcd_transfer_buffer1[32*1024];
 static uint8_t lcd_transfer_buffer2[32*1024];
+// this is the handle from the esp panel api
+static esp_lcd_panel_handle_t lcd_handle;
+
+using button_t = arduino::multi_button;
+static arduino::basic_button button_a_raw(35, 10, true);
+static arduino::basic_button button_b_raw(0, 10, true);
+button_t button_a(button_a_raw);
+button_t button_b(button_b_raw);
+
 static time_t time_now = 0;
 static char time_buffer[32];
+static char time_date_buffer[32];
 static long time_offset = 0;
 static ntp_time time_server;
 static char time_zone_buffer[64];
@@ -41,30 +56,98 @@ screen_t main_screen(
     lcd_transfer_buffer2);
 svg_clock_t ana_clock(main_screen);
 label_t dig_clock(main_screen);
+label_t dig_date(main_screen);
 label_t time_zone(main_screen);
 canvas_t wifi_icon(main_screen);
 
-// for dumping to the display (UIX)
-static void lcd_flush(const rect16& bounds,const void* bmp,void* state) {
-    // wrap the void* bitmap buffer with a read only (const) bitmap object
-    // this is a light and fast op
-    const const_bitmap<decltype(lcd)::pixel_type> cbmp(bounds.dimensions(),bmp);
-    // send what we just created to the display
-    draw::bitmap_async(lcd,bounds,cbmp,cbmp.bounds());
+// tell UIX the DMA transfer is complete
+static bool lcd_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
+{
+    main_screen.flush_complete();
+    return true;
 }
-// for display DMA (UIX/GFX)
-static void lcd_wait_flush(void* state) {
-    // wait for any async transfers to complete
-    lcd.wait_all_async();
+// tell the lcd panel api to transfer data via DMA
+static void lcd_on_flush(const rect16 &bounds, const void *bmp, void *state)
+{
+    int x1 = bounds.x1, y1 = bounds.y1, x2 = bounds.x2 + 1, y2 = bounds.y2 + 1;
+    esp_lcd_panel_draw_bitmap(lcd_handle, x1, y1, x2, y2, (void *)bmp);
+}
+// initialize the screen using the esp panel API
+static void lcd_panel_init()
+{
+    gpio_set_direction((gpio_num_t)4, GPIO_MODE_OUTPUT);
+    spi_bus_config_t buscfg;
+    memset(&buscfg, 0, sizeof(buscfg));
+    buscfg.sclk_io_num = 18;
+    buscfg.mosi_io_num = 19;
+    buscfg.miso_io_num = -1;
+    buscfg.quadwp_io_num = -1;
+    buscfg.quadhd_io_num = -1;
+    buscfg.max_transfer_sz = sizeof(lcd_transfer_buffer1) + 8;
+
+    // Initialize the SPI bus on VSPI (SPI3)
+    spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+
+    esp_lcd_panel_io_handle_t io_handle = NULL;
+    esp_lcd_panel_io_spi_config_t io_config;
+    memset(&io_config, 0, sizeof(io_config));
+    io_config.dc_gpio_num = 16,
+    io_config.cs_gpio_num = 5,
+    io_config.pclk_hz = 40 * 1000 * 1000,
+    io_config.lcd_cmd_bits = 8,
+    io_config.lcd_param_bits = 8,
+    io_config.spi_mode = 0,
+    io_config.trans_queue_depth = 10,
+    io_config.on_color_trans_done = lcd_flush_ready;
+    // Attach the LCD to the SPI bus
+    esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI3_HOST, &io_config, &io_handle);
+
+    lcd_handle = NULL;
+    esp_lcd_panel_dev_config_t panel_config;
+    memset(&panel_config, 0, sizeof(panel_config));
+    panel_config.reset_gpio_num = 23;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    panel_config.rgb_endian = LCD_RGB_ENDIAN_RGB;
+#else
+    panel_config.color_space = ESP_LCD_COLOR_SPACE_RGB;
+#endif
+    panel_config.bits_per_pixel = 16;
+
+    // Initialize the LCD configuration
+    esp_lcd_new_panel_st7789(io_handle, &panel_config, &lcd_handle);
+
+    // Turn off backlight to avoid unpredictable display on the LCD screen while initializing
+    // the LCD panel driver. (Different LCD screens may need different levels)
+    gpio_set_level((gpio_num_t)4, 0);
+    // Reset the display
+    esp_lcd_panel_reset(lcd_handle);
+
+    // Initialize LCD panel
+    esp_lcd_panel_init(lcd_handle);
+    // esp_lcd_panel_io_tx_param(io_handle, LCD_CMD_SLPOUT, NULL, 0);
+    //  Swap x and y axis (Different LCD screens may need different options)
+    esp_lcd_panel_swap_xy(lcd_handle, true);
+    esp_lcd_panel_set_gap(lcd_handle, 40, 52);
+    esp_lcd_panel_mirror(lcd_handle, false, true);
+    esp_lcd_panel_invert_color(lcd_handle, true);
+    // Turn on the screen
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    esp_lcd_panel_disp_on_off(lcd_handle, true);
+#else
+    esp_lcd_panel_disp_off(lcd_handle, false);
+#endif
+    // Turn on backlight (Different LCD screens may need different levels)
+    gpio_set_level((gpio_num_t)4, 1);
 }
 
-// updates the time string with the current time
+// updates the time strings with the current time and date
 static void update_time_buffer(time_t time) {
     tm tim = *localtime(&time);
     strftime(time_buffer, sizeof(time_buffer), "%I:%M %p", &tim);
     if(*time_buffer=='0') {
         *time_buffer=' ';
     }
+    strftime(time_date_buffer, sizeof(time_date_buffer), "%D", &tim);
 }
 
 static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* state) {
@@ -81,17 +164,16 @@ void button_pressed(bool pressed, void* state) {
 void setup()
 {
     Serial.begin(115200);
-    ttgo_initialize();
-    dimmer.max_level(.25);
-    lcd.rotation(3);
+    lcd_panel_init();
+    button_a.initialize();
+    button_b.initialize();
     Serial.println("Clock booted");
     // init the screen and callbacks
     main_screen.background_color(color_t::black);
-    main_screen.on_flush_callback(lcd_flush);
-    main_screen.wait_flush_callback(lcd_wait_flush);
+    main_screen.on_flush_callback(lcd_on_flush);
     
     // init the analog clock, 64x64
-    ana_clock.bounds(srect16(0,0,63,63).center_vertical((srect16)lcd.bounds()));
+    ana_clock.bounds(srect16(0,0,63,63).center_vertical(main_screen.bounds()));
     ana_clock.face_color(color32_t::light_gray);
     // make the second hand semi-transparent
     auto px = ana_clock.second_color();
@@ -132,7 +214,16 @@ void setup()
     dig_clock.text_color(color32_t::white);
     dig_clock.text_justify(uix_justify::top_middle);
     main_screen.register_control(dig_clock);
-
+    
+    *time_date_buffer = 0;
+    dig_date.bounds(dig_clock.bounds().offset(0,-dig_clock.dimensions().height-2));
+    dig_date.text(time_date_buffer);
+    dig_date.text_open_font(&text_font);
+    dig_date.text_line_height(35);
+    dig_date.text_color(color32_t::white);
+    dig_date.text_justify(uix_justify::top_middle);
+    main_screen.register_control(dig_date);
+    
     time_zone.bounds(srect16(0,main_screen.dimensions().height-40,main_screen.dimensions().width-1,main_screen.dimensions().height-1));
     time_zone.text_open_font(&text_font);
     time_zone.text_line_height(30);
@@ -210,6 +301,7 @@ void loop()
                 // set the digital clock - otherwise it only updates once a minute
                 update_time_buffer(time_now);
                 dig_clock.invalidate();
+                dig_date.invalidate();
                 time_zone.text(time_zone_buffer);
                 connection_state = 0;
                 Serial.println("Turning WiFi off.");
@@ -238,8 +330,9 @@ void loop()
     // only update every minute (efficient)
     if(0==(time%60)) {
         update_time_buffer(time);
-        // tell the label the text changed
+        // tell the labels the text changed
         dig_clock.invalidate();
+        dig_date.invalidate();
     }
         
     //////////////////////////
@@ -247,6 +340,6 @@ void loop()
     /////////////////////////
     time_server.update();
     main_screen.update();    
-    ttgo_update();
-    dimmer.wake(); // don't dim
+    button_a.update();
+    button_b.update();
 }
