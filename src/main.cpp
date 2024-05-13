@@ -46,7 +46,14 @@ static ntp_time time_server;
 static char time_zone_buffer[64];
 static bool time_fetching=false;
 
-static int connection_state=0;
+typedef enum {
+    CS_IDLE = 0,
+    CS_CONNECTING = 1,
+    CS_CONNECTED = 2,
+    CS_FETCHING = 3,
+    CS_POLLING = 4
+} connection_state_t;
+static connection_state_t connection_state= CS_IDLE;
 
 // the screen/control definitions
 screen_t main_screen(
@@ -157,8 +164,8 @@ static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* s
     }
 }
 void button_pressed(bool pressed, void* state) {
-    if(pressed && connection_state==0) {
-        connection_state = 1;
+    if(pressed && connection_state==CS_IDLE) {
+        connection_state = CS_CONNECTING;
     }
 }
 void setup()
@@ -250,13 +257,13 @@ void loop()
     static uint32_t time_ts = 0;
     IPAddress time_server_ip;
     switch(connection_state) { 
-        case 0: // idle
+        case CS_IDLE:
         if(connection_refresh_ts==0 || millis() > (connection_refresh_ts+(time_refresh_interval*1000))) {
             connection_refresh_ts = millis();
-            connection_state = 1;
+            connection_state = CS_CONNECTING;
         }
         break;
-        case 1: // connecting
+        case CS_CONNECTING:
             time_ts = 0;
             time_fetching = true;
             wifi_icon.invalidate();
@@ -267,32 +274,32 @@ void loop()
                 } else {
                     WiFi.begin(wifi_ssid,wifi_pass);
                 }
-                connection_state =2;
+                connection_state =CS_CONNECTED;
             } else if(WiFi.status()==WL_CONNECTED) {
-                connection_state = 2;
+                connection_state = CS_CONNECTED;
             }
             break;
-        case 2: // connected
+        case CS_CONNECTED:
             if(WiFi.status()==WL_CONNECTED) {
                 Serial.println("Connected.");
-                connection_state = 3;
+                connection_state = CS_FETCHING;
             } else if(WiFi.status()==WL_CONNECT_FAILED) {
                 connection_refresh_ts = 0; // immediately try to connect again
-                connection_state = 0;
+                connection_state = CS_IDLE;
                 time_fetching = false;
             }
             break;
-        case 3: // fetch
+        case CS_FETCHING:
             Serial.println("Retrieving time info...");
             connection_refresh_ts = millis();
             // grabs the timezone and tz offset based on IP
             ip_loc::fetch(nullptr,nullptr,&time_offset,nullptr,0,nullptr,0,time_zone_buffer,sizeof(time_zone_buffer));
             WiFi.hostByName(time_server_domain,time_server_ip);
-            connection_state = 4;
+            connection_state = CS_POLLING;
             time_ts = millis(); // we're going to correct for latency
             time_server.begin_request(time_server_ip);
             break;
-        case 4: // polling for response
+        case CS_POLLING:
             if(time_server.request_received()) {
                 const int latency_offset = (millis()-time_ts)/1000;
                 time_now=(time_t)(time_server.request_result()+time_offset+latency_offset);
@@ -302,14 +309,14 @@ void loop()
                 dig_clock.invalidate();
                 dig_date.invalidate();
                 time_zone.invalidate();
-                connection_state = 0;
+                connection_state = CS_IDLE;
                 Serial.println("Turning WiFi off.");
                 WiFi.disconnect(true,false);
                 time_fetching = false;
                 wifi_icon.invalidate();
             } else if(millis()>time_ts+(wifi_fetch_timeout*1000)) {
                 Serial.println("Retrieval timed out. Retrying.");
-                connection_state = 3;
+                connection_state = CS_FETCHING;
             }
             break;
     }
