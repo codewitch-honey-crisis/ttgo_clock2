@@ -1,4 +1,9 @@
 #include <Arduino.h>
+#include <driver/gpio.h>
+#include <driver/spi_master.h>
+#include <esp_lcd_panel_io.h>
+#include <esp_lcd_panel_ops.h>
+#include <esp_lcd_panel_vendor.h>
 #include <button.hpp>
 #include <uix.hpp>
 #include <gfx.hpp>
@@ -15,11 +20,6 @@
 // include this after everything else except ui.hpp
 #include <config.hpp>
 #include <ui.hpp>
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_panel_vendor.h"
 
 // namespace imports
 using namespace arduino;
