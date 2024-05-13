@@ -224,11 +224,13 @@ void setup()
     dig_date.text_justify(uix_justify::top_middle);
     main_screen.register_control(dig_date);
     
+    *time_zone_buffer = 0;
     time_zone.bounds(srect16(0,main_screen.dimensions().height-40,main_screen.dimensions().width-1,main_screen.dimensions().height-1));
     time_zone.text_open_font(&text_font);
     time_zone.text_line_height(30);
     time_zone.text_color(color32_t::light_sky_blue);
     time_zone.text_justify(uix_justify::top_middle);
+    time_zone.text(time_zone_buffer);
     main_screen.register_control(time_zone);
 
     // set up a custom canvas for displaying our wifi icon
@@ -299,7 +301,7 @@ void loop()
                 update_time_buffer(time_now);
                 dig_clock.invalidate();
                 dig_date.invalidate();
-                time_zone.text(time_zone_buffer);
+                time_zone.invalidate();
                 connection_state = 0;
                 Serial.println("Turning WiFi off.");
                 WiFi.disconnect(true,false);
