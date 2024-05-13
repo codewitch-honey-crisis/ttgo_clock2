@@ -232,10 +232,7 @@ void setup()
     main_screen.register_control(time_zone);
 
     // set up a custom canvas for displaying our wifi icon
-    wifi_icon.bounds(
-        srect16(spoint16(0,0),(ssize16)wifi_icon.dimensions())
-            .offset(main_screen.dimensions().width-
-                wifi_icon.dimensions().width,0));
+    wifi_icon.bounds(((srect16)faWifi.bounds()).offset(main_screen.dimensions().width-faWifi.dimensions().width,0));
     wifi_icon.on_paint_callback(wifi_icon_paint);
     main_screen.register_control(wifi_icon);
     button_a.on_pressed_changed(button_pressed);
@@ -325,11 +322,10 @@ void loop()
     ///////////////////
     // update the UI
     //////////////////
-    time_t time = time_now;
-    ana_clock.time(time);
+    ana_clock.time(time_now);
     // only update every minute (efficient)
-    if(0==(time%60)) {
-        update_time_buffer(time);
+    if(0==(time_now%60)) {
+        update_time_buffer(time_now);
         // tell the labels the text changed
         dig_clock.invalidate();
         dig_date.invalidate();
