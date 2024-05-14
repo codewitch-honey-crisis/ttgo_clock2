@@ -169,6 +169,8 @@ static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* s
 void button_pressed(bool pressed, void* state) {
     if(pressed) {
         if(lcd_dimmer.dimmed()) {
+            // refresh the screen before we undim it
+            main_screen.update();
             lcd_dimmer.wake();
         } else if(connection_state==CS_IDLE) {
             connection_state = CS_CONNECTING;
