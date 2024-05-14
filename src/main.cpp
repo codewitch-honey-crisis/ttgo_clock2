@@ -352,6 +352,7 @@ void loop()
     // pump various objects
     /////////////////////////
     time_server.update();
+    // don't bother updating the screen if the lcd is blacked out
     if(!lcd_dimmer.faded()) {
         main_screen.update();    
     }
