@@ -5,6 +5,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <button.hpp>
+#include <lcd_miser.hpp>
 #include <uix.hpp>
 #include <gfx.hpp>
 #include <WiFi.h>
@@ -31,6 +32,7 @@ static uint8_t lcd_transfer_buffer1[32*1024];
 static uint8_t lcd_transfer_buffer2[32*1024];
 // this is the handle from the esp panel api
 static esp_lcd_panel_handle_t lcd_handle;
+static lcd_miser<4> lcd_dimmer;
 
 using button_t = arduino::multi_button;
 static arduino::basic_button button_a_raw(35, 10, true);
@@ -82,7 +84,8 @@ static void lcd_on_flush(const rect16 &bounds, const void *bmp, void *state)
 // initialize the screen using the esp panel API
 static void lcd_panel_init()
 {
-    gpio_set_direction((gpio_num_t)4, GPIO_MODE_OUTPUT);
+    // backlight
+    // gpio_set_direction((gpio_num_t)4, GPIO_MODE_OUTPUT);
     spi_bus_config_t buscfg;
     memset(&buscfg, 0, sizeof(buscfg));
     buscfg.sclk_io_num = 18;
@@ -125,7 +128,7 @@ static void lcd_panel_init()
 
     // Turn off backlight to avoid unpredictable display on the LCD screen while initializing
     // the LCD panel driver. (Different LCD screens may need different levels)
-    gpio_set_level((gpio_num_t)4, 0);
+    // gpio_set_level((gpio_num_t)4, 0);
     // Reset the display
     esp_lcd_panel_reset(lcd_handle);
 
@@ -144,7 +147,7 @@ static void lcd_panel_init()
     esp_lcd_panel_disp_off(lcd_handle, false);
 #endif
     // Turn on backlight (Different LCD screens may need different levels)
-    gpio_set_level((gpio_num_t)4, 1);
+    // gpio_set_level((gpio_num_t)4, 1);
 }
 
 // updates the time strings with the current time and date
@@ -164,14 +167,19 @@ static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* s
     }
 }
 void button_pressed(bool pressed, void* state) {
-    if(pressed && connection_state==CS_IDLE) {
-        connection_state = CS_CONNECTING;
+    if(pressed) {
+        if(lcd_dimmer.dimmed()) {
+            lcd_dimmer.wake();
+        } else if(connection_state==CS_IDLE) {
+            connection_state = CS_CONNECTING;
+        }
     }
 }
 void setup()
 {
     Serial.begin(115200);
     lcd_panel_init();
+    lcd_dimmer.initialize();
     button_a.initialize();
     button_b.initialize();
     Serial.println("Clock booted");
@@ -345,6 +353,7 @@ void loop()
     /////////////////////////
     time_server.update();
     main_screen.update();    
+    lcd_dimmer.update();
     button_a.update();
     button_b.update();
 }
