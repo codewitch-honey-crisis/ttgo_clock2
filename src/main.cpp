@@ -352,7 +352,9 @@ void loop()
     // pump various objects
     /////////////////////////
     time_server.update();
-    main_screen.update();    
+    if(!lcd_dimmer.faded()) {
+        main_screen.update();    
+    }
     lcd_dimmer.update();
     button_a.update();
     button_b.update();
