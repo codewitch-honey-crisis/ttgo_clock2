@@ -1,14 +1,28 @@
+#if __has_include(<Arduino.h>)
 #include <Arduino.h>
+#include <WiFi.h>
+#else
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <esp_wifi.h>
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
+uint32_t millis() {
+    return pdTICKS_TO_MS(xTaskGetTickCount());
+}
+void loop();
+#endif
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <button.hpp>
-#include <lcd_miser.hpp>
 #include <uix.hpp>
 #include <gfx.hpp>
-#include <WiFi.h>
+#include <wifi_manager.hpp>
 #include <ip_loc.hpp>
 #include <ntp_time.hpp>
 // font is a TTF/OTF from downloaded from fontsquirrel.com
@@ -23,20 +37,25 @@
 #include <ui.hpp>
 
 // namespace imports
+#ifdef ARDUINO
 using namespace arduino;
+#else
+using namespace esp_idf;
+#endif
 using namespace gfx;
 using namespace uix;
+
+wifi_manager wifi_man;
 
 // use two 32KB buffers (DMA)
 static uint8_t lcd_transfer_buffer1[32*1024];
 static uint8_t lcd_transfer_buffer2[32*1024];
 // this is the handle from the esp panel api
 static esp_lcd_panel_handle_t lcd_handle;
-static lcd_miser<4> lcd_dimmer;
 
-using button_t = arduino::multi_button;
-static arduino::basic_button button_a_raw(35, 10, true);
-static arduino::basic_button button_b_raw(0, 10, true);
+using button_t = multi_button;
+static basic_button button_a_raw(35, 10, true);
+static basic_button button_b_raw(0, 10, true);
 button_t button_a(button_a_raw);
 button_t button_b(button_b_raw);
 
@@ -85,7 +104,7 @@ static void lcd_on_flush(const rect16 &bounds, const void *bmp, void *state)
 static void lcd_panel_init()
 {
     // backlight
-    // gpio_set_direction((gpio_num_t)4, GPIO_MODE_OUTPUT);
+    gpio_set_direction((gpio_num_t)4, GPIO_MODE_OUTPUT);
     spi_bus_config_t buscfg;
     memset(&buscfg, 0, sizeof(buscfg));
     buscfg.sclk_io_num = 18;
@@ -128,7 +147,7 @@ static void lcd_panel_init()
 
     // Turn off backlight to avoid unpredictable display on the LCD screen while initializing
     // the LCD panel driver. (Different LCD screens may need different levels)
-    // gpio_set_level((gpio_num_t)4, 0);
+    gpio_set_level((gpio_num_t)4, 0);
     // Reset the display
     esp_lcd_panel_reset(lcd_handle);
 
@@ -147,7 +166,7 @@ static void lcd_panel_init()
     esp_lcd_panel_disp_off(lcd_handle, false);
 #endif
     // Turn on backlight (Different LCD screens may need different levels)
-    // gpio_set_level((gpio_num_t)4, 1);
+    gpio_set_level((gpio_num_t)4, 1);
 }
 
 // updates the time strings with the current time and date
@@ -168,23 +187,22 @@ static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* s
 }
 void button_pressed(bool pressed, void* state) {
     if(pressed) {
-        if(lcd_dimmer.dimmed()) {
-            // refresh the screen before we undim it
-            main_screen.update();
-            lcd_dimmer.wake();
-        } else if(connection_state==CS_IDLE) {
+        if(connection_state==CS_IDLE) {
             connection_state = CS_CONNECTING;
         }
     }
 }
+#ifdef ARDUINO
 void setup()
 {
     Serial.begin(115200);
+#else
+extern "C" void app_main() {
+#endif
     lcd_panel_init();
-    lcd_dimmer.initialize();
     button_a.initialize();
     button_b.initialize();
-    Serial.println("Clock booted");
+    puts("Clock booted");
     // init the screen and callbacks
     main_screen.background_color(color_t::black);
     main_screen.on_flush_callback(lcd_on_flush);
@@ -212,13 +230,6 @@ void setup()
     //ana_clock.tick_color(color32_t::black);
     main_screen.register_control(ana_clock);
 
-    if(wifi_ssid!=nullptr) {
-        Serial.print("Using fixed SSID and credentials: ");
-        Serial.println(wifi_ssid);
-    } else {
-        Serial.println("Using stored SSID and credentials.");
-    }
-    
     // init the digital clock, 128x40, to the right of the analog clock
     dig_clock.bounds(
         srect16(0,0,127,39)
@@ -256,6 +267,17 @@ void setup()
     main_screen.register_control(wifi_icon);
     button_a.on_pressed_changed(button_pressed);
     button_b.on_pressed_changed(button_pressed);
+
+#ifndef ARDUINO
+    while(1) {
+        loop();
+        //static int count = 0;
+        //if(count>6) {
+            vTaskDelay(5);
+          //  count = 0;    
+        //}
+    }
+#endif
 }
 
 void loop()
@@ -265,7 +287,6 @@ void loop()
     ///////////////////////////////////
     static uint32_t connection_refresh_ts = 0;
     static uint32_t time_ts = 0;
-    IPAddress time_server_ip;
     switch(connection_state) { 
         case CS_IDLE:
         if(connection_refresh_ts==0 || millis() > (connection_refresh_ts+(time_refresh_interval*1000))) {
@@ -277,55 +298,50 @@ void loop()
             time_ts = 0;
             time_fetching = true;
             wifi_icon.invalidate();
-            if(WiFi.status()!=WL_CONNECTED) {
-                Serial.println("Connecting to network...");
-                if(wifi_ssid==nullptr) {
-                    WiFi.begin();
-                } else {
-                    WiFi.begin(wifi_ssid,wifi_pass);
-                }
+            if(wifi_man.state()!=wifi_manager_state::connected && wifi_man.state()!=wifi_manager_state::connecting) {
+                puts("Connecting to network...");
+                wifi_man.connect(wifi_ssid,wifi_pass);
                 connection_state =CS_CONNECTED;
-            } else if(WiFi.status()==WL_CONNECTED) {
+            } else if(wifi_man.state()==wifi_manager_state::connected) {
                 connection_state = CS_CONNECTED;
             }
             break;
         case CS_CONNECTED:
-            if(WiFi.status()==WL_CONNECTED) {
-                Serial.println("Connected.");
+            if(wifi_man.state()==wifi_manager_state::connected) {
+                puts("Connected.");
                 connection_state = CS_FETCHING;
-            } else if(WiFi.status()==WL_CONNECT_FAILED) {
+            } else {
                 connection_refresh_ts = 0; // immediately try to connect again
                 connection_state = CS_IDLE;
                 time_fetching = false;
             }
             break;
         case CS_FETCHING:
-            Serial.println("Retrieving time info...");
+            puts("Retrieving time info...");
             connection_refresh_ts = millis();
             // grabs the timezone and tz offset based on IP
             ip_loc::fetch(nullptr,nullptr,&time_offset,nullptr,0,nullptr,0,time_zone_buffer,sizeof(time_zone_buffer));
-            WiFi.hostByName(time_server_domain,time_server_ip);
             connection_state = CS_POLLING;
             time_ts = millis(); // we're going to correct for latency
-            time_server.begin_request(time_server_ip);
+            time_server.begin_request();
             break;
         case CS_POLLING:
             if(time_server.request_received()) {
                 const int latency_offset = (millis()-time_ts)/1000;
                 time_now=(time_t)(time_server.request_result()+time_offset+latency_offset);
-                Serial.println("Clock set.");
+                puts("Clock set.");
                 // set the digital clock - otherwise it only updates once a minute
                 update_time_buffer(time_now);
                 dig_clock.invalidate();
                 dig_date.invalidate();
                 time_zone.invalidate();
                 connection_state = CS_IDLE;
-                Serial.println("Turning WiFi off.");
-                WiFi.disconnect(true,false);
+                puts("Turning WiFi off.");
+                wifi_man.disconnect(true);
                 time_fetching = false;
                 wifi_icon.invalidate();
             } else if(millis()>time_ts+(wifi_fetch_timeout*1000)) {
-                Serial.println("Retrieval timed out. Retrying.");
+                puts("Retrieval timed out. Retrying.");
                 connection_state = CS_FETCHING;
             }
             break;
@@ -354,11 +370,8 @@ void loop()
     // pump various objects
     /////////////////////////
     time_server.update();
-    // don't bother updating the screen if the lcd is blacked out
-    if(!lcd_dimmer.faded()) {
-        main_screen.update();    
-    }
-    lcd_dimmer.update();
+    main_screen.update();    
+    
     button_a.update();
     button_b.update();
 }
