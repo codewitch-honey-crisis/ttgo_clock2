@@ -270,11 +270,7 @@ extern "C" void app_main() {
 #ifndef ARDUINO
     while(1) {
         loop();
-        //static int count = 0;
-        //if(count>6) {
-            vTaskDelay(5);
-          //  count = 0;    
-        //}
+        vTaskDelay(5);
     }
 #endif
 }
