@@ -65,7 +65,6 @@ static char time_date_buffer[32];
 static long time_offset = 0;
 static ntp_time time_server;
 static char time_zone_buffer[64];
-static bool time_fetching=false;
 
 typedef enum {
     CS_IDLE = 0,
@@ -181,7 +180,7 @@ static void update_time_buffer(time_t time) {
 
 static void wifi_icon_paint(surface_t& destination, const srect16& clip, void* state) {
     // if we're using the radio, indicate it with the appropriate icon
-    if(time_fetching) {
+    if(wifi_man.state()==wifi_manager_state::connected||wifi_man.state()==wifi_manager_state::connecting) {
         draw::icon(destination,point16::zero(),faWifi,color_t::light_gray);
     }
 }
@@ -296,7 +295,6 @@ void loop()
         break;
         case CS_CONNECTING:
             time_ts = 0;
-            time_fetching = true;
             wifi_icon.invalidate();
             if(wifi_man.state()!=wifi_manager_state::connected && wifi_man.state()!=wifi_manager_state::connecting) {
                 puts("Connecting to network...");
@@ -313,7 +311,7 @@ void loop()
             } else {
                 connection_refresh_ts = 0; // immediately try to connect again
                 connection_state = CS_IDLE;
-                time_fetching = false;
+
             }
             break;
         case CS_FETCHING:
@@ -338,7 +336,6 @@ void loop()
                 connection_state = CS_IDLE;
                 puts("Turning WiFi off.");
                 wifi_man.disconnect(true);
-                time_fetching = false;
                 wifi_icon.invalidate();
             } else if(millis()>time_ts+(wifi_fetch_timeout*1000)) {
                 puts("Retrieval timed out. Retrying.");
